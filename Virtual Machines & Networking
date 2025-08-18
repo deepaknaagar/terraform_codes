@@ -1,0 +1,562 @@
+Root Configuration
+providers.tf
+
+text
+# Configure the AzureRM Provider which allows Terraform to interact with Azure resources
+provider "azurerm" {
+  features {}
+}
+variables.tf
+
+text
+# Terraform variables for user-configurable inputs with defaults and descriptions
+
+variable "resource_group_name" {
+  description = "Name of the Azure resource group to deploy all resources into."
+  type        = string
+  default     = "web-demo-rg"
+}
+
+variable "location" {
+  description = "Azure region where resources will be deployed."
+  type        = string
+  default     = "East US"
+}
+
+variable "tags" {
+  description = "Common tags to associate with all Azure resources for management and billing."
+  type        = map(string)
+  default = {
+    Environment = "Production"
+  }
+}
+
+# Virtual Network variables
+variable "vnet_name" {
+  description = "Name of the Virtual Network."
+  type        = string
+  default     = "web-demo-vnet"
+}
+
+variable "vnet_address_space" {
+  description = "CIDR address space for the Virtual Network."
+  type        = list(string)
+  default     = ["10.20.0.0/16"]
+}
+
+variable "subnet_name" {
+  description = "Name of the subnet within the VNet."
+  type        = string
+  default     = "web-demo-subnet"
+}
+
+variable "subnet_prefix" {
+  description = "CIDR prefix for the subnet."
+  type        = string
+  default     = "10.20.1.0/24"
+}
+
+# Network Security Group variables
+variable "nsg_name" {
+  description = "Name of the network security group to create."
+  type        = string
+  default     = "web-demo-nsg"
+}
+
+variable "nsg_rules" {
+  description = <<EOT
+List of security rules for NSG that control inbound/outbound traffic.
+Includes rules to allow SSH (port 22) and HTTP (port 80).
+EOT
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = string
+    destination_port_range     = string
+    source_address_prefix      = string
+    destination_address_prefix = string
+  }))
+  default = [
+    {
+      name                       = "Allow-SSH"
+      priority                   = 1001
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "22"
+      source_address_prefix      = "*"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "Allow-HTTP"
+      priority                   = 1002
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "80"
+      source_address_prefix      = "*"
+      destination_address_prefix = "*"
+    }
+  ]
+}
+
+# Virtual Machine variables
+variable "vm_name" {
+  description = "Name of the Linux virtual machine."
+  type        = string
+  default     = "web-demo-vm"
+}
+
+variable "vm_size" {
+  description = "Size/type of the Azure VM instance."
+  type        = string
+  default     = "Standard_B2s" # Small but adequately sized for web server and SSH
+}
+
+variable "admin_username" {
+  description = "Username for logging into the Linux VM."
+  type        = string
+  default     = "azureuser"
+}
+
+variable "admin_ssh_key_path" {
+  description = "Path to your SSH public key file used for VM authentication."
+  type        = string
+  default     = "~/.ssh/id_rsa.pub"
+}
+main.tf
+
+text
+# Root Terraform configuration that initializes infrastructure by calling reusable modules
+
+# Create a resource group that groups all resources together
+resource "azurerm_resource_group" "main" {
+  name     = var.resource_group_name
+  location = var.location
+  tags     = var.tags
+}
+
+# Call the Virtual Network module to create the VNet and subnet
+module "vnet" {
+  source              = "./modules/vnet"           # Path to the VNet reusable module
+  vnet_name           = var.vnet_name              # Name of VNet
+  location            = var.location                # Azure region
+  resource_group_name = azurerm_resource_group.main.name  # Resource group to deploy into
+  address_space       = var.vnet_address_space      # Address range for VNet
+  subnet_name         = var.subnet_name             # Name of subnet
+  subnet_prefix       = var.subnet_prefix           # CIDR prefix for subnet
+  tags                = var.tags                    # Tags applied to resources
+}
+
+# Call NSG module to create security group allowing SSH & HTTP
+module "nsg" {
+  source              = "./modules/nsg"             # Path to NSG reusable module
+  nsg_name            = var.nsg_name                # Name of NSG
+  location            = var.location                # Region
+  resource_group_name = azurerm_resource_group.main.name
+  nsg_rules           = var.nsg_rules               # List of ingress rules (SSH, HTTP)
+  tags                = var.tags
+}
+
+# Call VM module to deploy Ubuntu Linux VM, associate subnet and NSG, and bootstrap nginx with cloud-init
+module "vm" {
+  source              = "./modules/vm"
+  vm_name             = var.vm_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.main.name
+  subnet_id           = module.vnet.subnet_id           # Subnet ID output from VNet module
+  nsg_id              = module.nsg.nsg_id               # NSG ID from NSG module
+  vm_size             = var.vm_size
+  admin_username      = var.admin_username
+  admin_ssh_key       = file(var.admin_ssh_key_path)    # Reads the public SSH key file content
+  custom_data         = file("cloud-init-nginx.yml")    # Reads cloud-init script to bootstrap nginx
+  tags                = var.tags
+}
+outputs.tf
+
+text
+# Outputs for root module
+
+output "vm_public_ip" {
+  description = "The public IP address assigned to the Linux VM."
+  value       = module.vm.public_ip
+}
+
+output "vm_id" {
+  description = "The Azure resource ID of the created Linux VM."
+  value       = module.vm.vm_id
+}
+
+output "subnet_id" {
+  description = "The resource ID of the subnet in which VM’s NIC is deployed."
+  value       = module.vnet.subnet_id
+}
+cloud-init-nginx.yml (Bootstrap script)
+text
+#cloud-config
+# This cloud-init script updates the package cache, upgrades any packages,
+# installs nginx web server, and ensures the service is enabled and running.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - nginx
+
+runcmd:
+  - systemctl enable nginx
+  - systemctl start nginx
+modules/vnet
+main.tf
+
+text
+# Creates a Virtual Network and Subnet in Azure
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = var.vnet_name                 # Provided VNet name
+  location            = var.location                  # Azure region
+  resource_group_name = var.resource_group_name       # RG where VNet placed
+  address_space       = var.address_space             # CIDR block for VNet
+  tags                = var.tags                      # Tags for organization
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = var.subnet_name              # Subnet name within VNet
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.vnet.name  # VNet resource linkage
+  address_prefixes     = [var.subnet_prefix]           # Subnet address prefix CIDR
+}
+variables.tf
+
+text
+variable "vnet_name" {
+  description = "Name of virtual network"
+  type        = string
+}
+variable "location" {
+  description = "Azure region"
+  type        = string
+}
+variable "resource_group_name" {
+  description = "Resource group name"
+  type        = string
+}
+variable "address_space" {
+  description = "CIDR address space for VNet"
+  type        = list(string)
+}
+variable "subnet_name" {
+  description = "Subnet name in the VNet"
+  type        = string
+}
+variable "subnet_prefix" {
+  description = "CIDR prefix for the subnet"
+  type        = string
+}
+variable "tags" {
+  description = "Resource tags"
+  type        = map(string)
+  default     = {}
+}
+outputs.tf
+
+text
+output "vnet_id" {
+  description = "Virtual Network resource ID"
+  value       = azurerm_virtual_network.vnet.id
+}
+
+output "subnet_id" {
+  description = "Subnet resource ID"
+  value       = azurerm_subnet.subnet.id
+}
+modules/nsg
+main.tf
+
+text
+# Create Network Security Group and configure rules
+
+resource "azurerm_network_security_group" "nsg" {
+  name                = var.nsg_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_network_security_rule" "rules" {
+  count                       = length(var.nsg_rules)
+  name                        = var.nsg_rules[count.index].name
+  priority                    = var.nsg_rules[count.index].priority
+  direction                   = var.nsg_rules[count.index].direction
+  access                      = var.nsg_rules[count.index].access
+  protocol                    = var.nsg_rules[count.index].protocol
+  source_port_range           = var.nsg_rules[count.index].source_port_range
+  destination_port_range      = var.nsg_rules[count.index].destination_port_range
+  source_address_prefix       = var.nsg_rules[count.index].source_address_prefix
+  destination_address_prefix  = var.nsg_rules[count.index].destination_address_prefix
+  resource_group_name         = var.resource_group_name
+  network_security_group_name = azurerm_network_security_group.nsg.name
+}
+variables.tf
+
+text
+variable "nsg_name" {
+  description = "Name of the Network Security Group"
+  type        = string
+}
+variable "location" {
+  description = "Azure region"
+  type        = string
+}
+variable "resource_group_name" {
+  description = "Name of resource group"
+  type        = string
+}
+variable "nsg_rules" {
+  description = "List of NSG rule objects"
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = string
+    destination_port_range     = string
+    source_address_prefix      = string
+    destination_address_prefix = string
+  }))
+}
+variable "tags" {
+  description = "Tags to apply to NSG"
+  type        = map(string)
+  default     = {}
+}
+outputs.tf
+
+text
+output "nsg_id" {
+  description = "ID of the Network Security Group"
+  value       = azurerm_network_security_group.nsg.id
+}
+
+output "nsg_name" {
+  description = "Name of the NSG"
+  value       = azurerm_network_security_group.nsg.name
+}
+modules/vm
+main.tf
+
+text
+# Creates a Linux Virtual Machine with Public IP and NIC attached to subnet and NSG
+# Applies cloud-init script to install and start NGINX
+
+resource "azurerm_public_ip" "vm_pip" {
+  name                = "${var.vm_name}-pip"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  allocation_method   = "Static"      # Static IP to maintain consistent access IP
+  sku                 = "Standard"    # Standard SKU for production grade
+  tags                = var.tags
+}
+
+resource "azurerm_network_interface" "nic" {
+  name                = "${var.vm_name}-nic"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+
+  ip_configuration {
+    name                          = "ipconfig1"
+    subnet_id                     = var.subnet_id       # Associated subnet from VNet module
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.vm_pip.id  # Associated public IP
+  }
+}
+
+# Associate NSG with NIC for security enforcement
+resource "azurerm_network_interface_security_group_association" "assoc" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = var.nsg_id
+}
+
+resource "azurerm_linux_virtual_machine" "vm" {
+  name                  = var.vm_name
+  location              = var.location
+  resource_group_name   = var.resource_group_name
+  size                  = var.vm_size
+  admin_username        = var.admin_username
+  network_interface_ids = [azurerm_network_interface.nic.id]
+  tags                  = var.tags
+
+  # Use SSH key for authentication for security best practice
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.admin_ssh_key
+  }
+
+  # Inject cloud-init script for bootstrapping (installs nginx)
+  custom_data = var.custom_data
+
+  os_disk {
+    name                 = "${var.vm_name}-osdisk"
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"         # Ubuntu base image publisher
+    offer     = "UbuntuServer"
+    sku       = "20_04-lts-gen2"   # Ubuntu 20.04 LTS Gen2 image
+    version   = "latest"
+  }
+}
+variables.tf
+
+text
+variable "vm_name" {
+  description = "The name of the virtual machine"
+  type        = string
+}
+
+variable "location" {
+  description = "The Azure region for deployment"
+  type        = string
+}
+
+variable "resource_group_name" {
+  description = "Target resource group name"
+  type        = string
+}
+
+variable "subnet_id" {
+  description = "Subnet ID where the VM's NIC will be deployed"
+  type        = string
+}
+
+variable "nsg_id" {
+  description = "Network Security Group ID associated with VM NIC"
+  type        = string
+}
+
+variable "vm_size" {
+  description = "Azure VM size, e.g. Standard_B2s"
+  type        = string
+  default     = "Standard_B2s"
+}
+
+variable "admin_username" {
+  description = "Linux administrator username"
+  type        = string
+}
+
+variable "admin_ssh_key" {
+  description = "Contents of the public SSH key"
+  type        = string
+}
+
+variable "custom_data" {
+  description = "Cloud-init configuration data (script or YAML)"
+  type        = string
+}
+
+variable "tags" {
+  description = "Tags applied to VM and associated resources"
+  type        = map(string)
+  default     = {}
+}
+outputs.tf
+
+text
+output "vm_id" {
+  description = "Azure ID of the VM"
+  value       = azurerm_linux_virtual_machine.vm.id
+}
+
+output "public_ip" {
+  description = "Public IP address assigned to the VM"
+  value       = azurerm_public_ip.vm_pip.ip_address
+}
+
+output "nic_id" {
+  description = "Azure network interface resource ID"
+  value       = azurerm_network_interface.nic.id
+}
+terraform.tfvars example (with explanations)
+text
+# terraform.tfvars contains actual values to customize deployment
+
+resource_group_name = "web-demo-rg"
+location           = "East US"
+
+# Resource tagging for cost tracking
+tags = {
+  Environment = "Production"
+  Owner       = "OpsTeam"
+  Project     = "WebServerInfra"
+}
+
+# Virtual Network config
+vnet_name          = "web-demo-vnet"
+vnet_address_space = ["10.20.0.0/16"]
+
+# Subnet configuration
+subnet_name   = "web-demo-subnet"
+subnet_prefix = "10.20.1.0/24"
+
+# Network Security Group configuration with rules
+nsg_name = "web-demo-nsg"
+nsg_rules = [
+  {
+    name                       = "Allow-SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  },
+  {
+    name                       = "Allow-HTTP"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+]
+
+# Virtual Machine configuration
+vm_name           = "web-demo-vm"
+vm_size           = "Standard_B2s"
+admin_username    = "azureuser"
+admin_ssh_key_path = "~/.ssh/id_rsa.pub"  # Path to your SSH public key (adjust if needed)
+README.md update for terraform.tfvars information
+
+Include this section in the README to instruct users on customizing tfvars:
+
+text
+## terraform.tfvars Usage
+
+- Customize the following variables before applying the configuration:
+
+  - `resource_group_name`: Name of the Azure resource group.
+  - `location`: Azure region (e.g., East US, West Europe).
+  - `tags`: Key-value pairs applied to all Azure resources for identification.
+  - `vnet_name`, `vnet_address_space`: Virtual network name and address space CIDR.
+  - `subnet_name`, `subnet_prefix`: Subnet name and CIDR within virtual network.
+  - `nsg_name`, `nsg_rules`: Network Security Group name and ingress rule list.
+  - `vm_name`, `vm_size`: Name and size of the Linux virtual machine.
+  - `admin_username`: Username for SSH access.
+  - `admin_ssh_key_path`: Local path of your SSH public key file.
+
+- Example `terraform.tfvars` is included to get you started quickly.
+- Ensure your SSH key is valid and accessible on your local machine.
