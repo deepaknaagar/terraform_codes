@@ -1,5 +1,5 @@
 Directory Structure
-assignment2/
+
 ├── main.tf
 ├── variables.tf
 ├── outputs.tf
