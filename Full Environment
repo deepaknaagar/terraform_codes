@@ -1,0 +1,368 @@
+full-env/
+├── main.tf
+├── variables.tf
+├── outputs.tf
+├── terraform.tfvars
+├── README.md
+├── cloud-init-nginx.yml
+└── modules/
+     ├── vnet/
+     ├── nsg/
+     ├── vm/
+     ├── automation_account/
+     ├── log_analytics/
+     └── update_management/
+main.tf
+text
+# Root config: Composes full modular Azure environment with patch-managed Linux VM
+
+provider "azurerm" {
+  features {}
+}
+
+# Resource group holds all infra
+resource "azurerm_resource_group" "main" {
+  name     = var.resource_group_name
+  location = var.region
+  tags     = var.tags
+}
+
+# Networking: VNet + Subnet
+module "vnet" {
+  source              = "./modules/vnet"
+  vnet_name           = var.vnet_name
+  location            = var.region
+  resource_group_name = azurerm_resource_group.main.name
+  address_space       = var.vnet_address_space
+  subnet_name         = var.subnet_name
+  subnet_prefix       = var.subnet_prefix
+  tags                = var.tags
+}
+
+# Security: NSG (firewall)
+module "nsg" {
+  source              = "./modules/nsg"
+  nsg_name            = var.nsg_name
+  location            = var.region
+  resource_group_name = azurerm_resource_group.main.name
+  nsg_rules           = var.nsg_rules
+  tags                = var.tags
+}
+
+# VM: Ubuntu, NGINX bootstrapped via cloud-init, in subnet/NSG
+module "vm" {
+  source               = "./modules/vm"
+  vm_name              = var.vm_name
+  location             = var.region
+  resource_group_name  = azurerm_resource_group.main.name
+  subnet_id            = module.vnet.subnet_id
+  nsg_id               = module.nsg.nsg_id
+  vm_size              = var.vm_size
+  admin_username       = var.admin_username
+  admin_ssh_key        = file(var.admin_ssh_key_path)
+  custom_data          = file("cloud-init-nginx.yml")
+  tags                 = var.tags
+}
+
+# Automation: patch orchestration
+module "automation" {
+  source                  = "./modules/automation_account"
+  automation_account_name = var.automation_account_name
+  location                = var.region
+  resource_group_name     = azurerm_resource_group.main.name
+  tags                    = var.tags
+}
+
+# Monitoring: Log Analytics
+module "log_analytics" {
+  source              = "./modules/log_analytics"
+  workspace_name      = var.workspace_name
+  location            = var.region
+  resource_group_name = azurerm_resource_group.main.name
+  tags                = var.tags
+}
+
+# Patch Management: VM scheduling
+module "update_management" {
+  source                = "./modules/update_management"
+  configuration_name    = var.update_config_name
+  automation_account_id = module.automation.automation_account_id
+  operating_system      = "Linux"
+  vm_ids                = [module.vm.vm_id]
+  start_time            = var.schedule_start_time
+  week_days             = var.schedule_week_days
+  schedule_name         = var.schedule_name
+  time_zone             = var.schedule_time_zone
+}
+variables.tf
+text
+# Global controls: customize everything via tfvars
+
+variable "region" {
+  description = "Azure region for all resources."
+  type        = string
+  default     = "East US"
+}
+variable "resource_group_name" {
+  description = "Resource group for environment."
+  type        = string
+  default     = "fullenv-rg"
+}
+variable "tags" {
+  description = "Tags for resource tracking."
+  type        = map(string)
+  default     = { Environment = "Production" }
+}
+
+# Networking
+variable "vnet_name" {
+  description = "VNet name."
+  type        = string
+  default     = "fullenv-vnet"
+}
+variable "vnet_address_space" {
+  description = "Address space for VNet."
+  type        = list(string)
+  default     = ["10.40.0.0/16"]
+}
+variable "subnet_name" {
+  description = "Subnet name."
+  type        = string
+  default     = "fullenv-subnet"
+}
+variable "subnet_prefix" {
+  description = "Subnet CIDR."
+  type        = string
+  default     = "10.40.1.0/24"
+}
+
+# NSG
+variable "nsg_name" {
+  description = "NSG name."
+  type        = string
+  default     = "fullenv-nsg"
+}
+variable "nsg_rules" {
+  description = "Ingress rules for NSG."
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = string
+    destination_port_range     = string
+    source_address_prefix      = string
+    destination_address_prefix = string
+  }))
+  default = [
+    {
+      name    = "Allow-SSH"
+      priority= 1001
+      direction="Inbound"
+      access="Allow"
+      protocol="Tcp"
+      source_port_range="*"
+      destination_port_range="22"
+      source_address_prefix="*"
+      destination_address_prefix="*"
+    },
+    {
+      name    = "Allow-HTTP"
+      priority= 1002
+      direction="Inbound"
+      access="Allow"
+      protocol="Tcp"
+      source_port_range="*"
+      destination_port_range="80"
+      source_address_prefix="*"
+      destination_address_prefix="*"
+    }
+  ]
+}
+
+# VM
+variable "vm_name" {
+  description = "VM name."
+  type        = string
+  default     = "fullenv-vm"
+}
+variable "vm_size" {
+  description = "Azure VM size/type."
+  type        = string
+  default     = "Standard_B2s"
+}
+variable "admin_username" {
+  description = "Admin username for Linux VM."
+  type        = string
+  default     = "azureuser"
+}
+variable "admin_ssh_key_path" {
+  description = "Path to SSH public key file."
+  type        = string
+  default     = "~/.ssh/id_rsa.pub"
+}
+
+# Automation & Log Analytics
+variable "automation_account_name" {
+  description = "Automation Account name."
+  type        = string
+  default     = "fullenv-automation"
+}
+variable "workspace_name" {
+  description = "Log Analytics Workspace name."
+  type        = string
+  default     = "fullenv-laworkspace"
+}
+
+# Patch management & scheduling
+variable "update_config_name" {
+  description = "Name for update mgmt config."
+  type        = string
+  default     = "weekly-linux-patch"
+}
+variable "schedule_start_time" {
+  description = "Start time ISO8601 UTC for patch schedule."
+  type        = string
+  default     = "2025-08-20T04:00:00Z"
+}
+variable "schedule_week_days" {
+  description = "Days for patch schedule."
+  type        = list(string)
+  default     = ["Wednesday"]
+}
+variable "schedule_name" {
+  description = "Patch schedule name."
+  type        = string
+  default     = "weekly-patch"
+}
+variable "schedule_time_zone" {
+  description = "Time zone for scheduling."
+  type        = string
+  default     = "UTC"
+}
+terraform.tfvars (Example)
+text
+region                = "East US"
+resource_group_name   = "fullenv-rg"
+tags = {
+  Environment = "Production"
+  Owner       = "OpsTeam"
+  Project     = "PatchManagedWeb"
+}
+
+vnet_name          = "fullenv-vnet"
+vnet_address_space = ["10.40.0.0/16"]
+subnet_name        = "fullenv-subnet"
+subnet_prefix      = "10.40.1.0/24"
+
+nsg_name = "fullenv-nsg"
+nsg_rules = [
+  {
+    name                       = "Allow-SSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  },
+  {
+    name                       = "Allow-HTTP"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+]
+
+vm_name           = "fullenv-vm"
+vm_size           = "Standard_B2s"
+admin_username    = "azureuser"
+admin_ssh_key_path= "~/.ssh/id_rsa.pub"
+
+automation_account_name = "fullenv-automation"
+workspace_name          = "fullenv-laworkspace"
+update_config_name      = "weekly-linux-patch"
+schedule_start_time     = "2025-08-20T04:00:00Z"
+schedule_week_days      = ["Wednesday"]
+schedule_name           = "weekly-patch"
+schedule_time_zone      = "UTC"
+cloud-init-nginx.yml Example
+text
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - nginx
+runcmd:
+  - systemctl enable nginx
+  - systemctl start nginx
+outputs.tf
+text
+output "vm_public_ip" {
+  description = "Public IP of deployed Linux VM."
+  value       = module.vm.public_ip
+}
+output "vm_id" {
+  description = "Resource ID of deployed VM."
+  value       = module.vm.vm_id
+}
+output "patch_schedule_id" {
+  description = "ID of scheduled patch deployment."
+  value       = module.update_management.schedule_id
+}
+README.md (with Architecture Diagram & Usage)
+text
+# Patch-Managed Azure Linux Web Server: Full Environment
+
+## Architecture Diagram
+
+[Azure Resource Group]
+   ├── [Virtual Network + Subnet] (VNet/subnet via module)
+   │      └── [Linux VM] (Ubuntu + NGINX cloud-init, public IP, NIC in subnet)
+   │            └── [Network Security Group] (21/80 ingress)
+   │
+   ├── [Automation Account] (patch orchestration)
+   ├── [Log Analytics Workspace] (monitor patch status)
+   └── [Update Management] (schedule weekly Linux patch)
+
+## Usage Guide
+
+1. **Prerequisites:** Terraform v1.4+, Azure CLI, valid SSH public key.
+2. **Edit `terraform.tfvars`:** Customize region, VM size, schedule, tags, and SSH key.
+3. **Initialize:**
+terraform init
+
+text
+4. **Preview:**
+terraform plan
+
+text
+5. **Deploy:**
+terraform apply
+
+text
+6. **Access your VM:**  
+- SSH: `ssh azureuser@<public_ip>`
+- HTTP: `http://<public_ip>/`
+7. **Monitor Patch Compliance:**  
+- In Azure Portal:
+  - Go to Log Analytics Workspace, select "Update Management" for compliance dashboard and reporting.
+- You can also run queries in Log Analytics for compliance status.
+
+## Extending & Customizing
+
+- To change patch schedule: Edit `schedule_start_time`, `schedule_week_days`, or `schedule_time_zone` in `terraform.tfvars`.
+- For multiple VMs, add their IDs to the `vm_ids` input for update management.
+
+## Destroy Environment
+
+To remove all resources and avoid Azure charges:
+terraform destroy
