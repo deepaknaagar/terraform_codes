@@ -1,14 +1,12 @@
 Root Configuration
 providers.tf
 
-text
 # Configure the AzureRM Provider which allows Terraform to interact with Azure resources
 provider "azurerm" {
   features {}
 }
 variables.tf
 
-text
 # Terraform variables for user-configurable inputs with defaults and descriptions
 
 variable "resource_group_name" {
@@ -115,7 +113,7 @@ variable "vm_name" {
 variable "vm_size" {
   description = "Size/type of the Azure VM instance."
   type        = string
-  default     = "Standard_B2s" # Small but adequately sized for web server and SSH
+  default     = "Standard_B2s" 
 }
 
 variable "admin_username" {
@@ -131,7 +129,6 @@ variable "admin_ssh_key_path" {
 }
 main.tf
 
-text
 # Root Terraform configuration that initializes infrastructure by calling reusable modules
 
 # Create a resource group that groups all resources together
@@ -179,7 +176,6 @@ module "vm" {
 }
 outputs.tf
 
-text
 # Outputs for root module
 
 output "vm_public_ip" {
@@ -196,8 +192,8 @@ output "subnet_id" {
   description = "The resource ID of the subnet in which VM’s NIC is deployed."
   value       = module.vnet.subnet_id
 }
+
 cloud-init-nginx.yml (Bootstrap script)
-text
 #cloud-config
 # This cloud-init script updates the package cache, upgrades any packages,
 # installs nginx web server, and ensures the service is enabled and running.
@@ -214,7 +210,7 @@ runcmd:
 modules/vnet
 main.tf
 
-text
+
 # Creates a Virtual Network and Subnet in Azure
 
 resource "azurerm_virtual_network" "vnet" {
@@ -233,7 +229,6 @@ resource "azurerm_subnet" "subnet" {
 }
 variables.tf
 
-text
 variable "vnet_name" {
   description = "Name of virtual network"
   type        = string
@@ -265,7 +260,6 @@ variable "tags" {
 }
 outputs.tf
 
-text
 output "vnet_id" {
   description = "Virtual Network resource ID"
   value       = azurerm_virtual_network.vnet.id
@@ -275,10 +269,11 @@ output "subnet_id" {
   description = "Subnet resource ID"
   value       = azurerm_subnet.subnet.id
 }
+
+
 modules/nsg
 main.tf
 
-text
 # Create Network Security Group and configure rules
 
 resource "azurerm_network_security_group" "nsg" {
@@ -302,9 +297,9 @@ resource "azurerm_network_security_rule" "rules" {
   resource_group_name         = var.resource_group_name
   network_security_group_name = azurerm_network_security_group.nsg.name
 }
+
 variables.tf
 
-text
 variable "nsg_name" {
   description = "Name of the Network Security Group"
   type        = string
@@ -336,9 +331,10 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+
 outputs.tf
 
-text
 output "nsg_id" {
   description = "ID of the Network Security Group"
   value       = azurerm_network_security_group.nsg.id
@@ -348,10 +344,11 @@ output "nsg_name" {
   description = "Name of the NSG"
   value       = azurerm_network_security_group.nsg.name
 }
+
+
 modules/vm
 main.tf
 
-text
 # Creates a Linux Virtual Machine with Public IP and NIC attached to subnet and NSG
 # Applies cloud-init script to install and start NGINX
 
@@ -414,9 +411,10 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 }
+
+
 variables.tf
 
-text
 variable "vm_name" {
   description = "The name of the virtual machine"
   type        = string
@@ -468,9 +466,10 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+
 outputs.tf
 
-text
 output "vm_id" {
   description = "Azure ID of the VM"
   value       = azurerm_linux_virtual_machine.vm.id
@@ -485,8 +484,10 @@ output "nic_id" {
   description = "Azure network interface resource ID"
   value       = azurerm_network_interface.nic.id
 }
+
+
 terraform.tfvars example (with explanations)
-text
+
 # terraform.tfvars contains actual values to customize deployment
 
 resource_group_name = "web-demo-rg"
@@ -543,7 +544,7 @@ README.md update for terraform.tfvars information
 
 Include this section in the README to instruct users on customizing tfvars:
 
-text
+
 ## terraform.tfvars Usage
 
 - Customize the following variables before applying the configuration:
@@ -558,5 +559,4 @@ text
   - `admin_username`: Username for SSH access.
   - `admin_ssh_key_path`: Local path of your SSH public key file.
 
-- Example `terraform.tfvars` is included to get you started quickly.
 - Ensure your SSH key is valid and accessible on your local machine.
