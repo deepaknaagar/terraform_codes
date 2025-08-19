@@ -1,4 +1,5 @@
-full-env/
+Directory Structure
+
 ├── main.tf
 ├── variables.tf
 ├── outputs.tf
@@ -12,8 +13,10 @@ full-env/
      ├── automation_account/
      ├── log_analytics/
      └── update_management/
+
+
 main.tf
-text
+
 # Root config: Composes full modular Azure environment with patch-managed Linux VM
 
 provider "azurerm" {
@@ -94,9 +97,10 @@ module "update_management" {
   schedule_name         = var.schedule_name
   time_zone             = var.schedule_time_zone
 }
+
 variables.tf
-text
-# Global controls: customize everything via tfvars
+
+#  Everything can be customized via tfvars
 
 variable "region" {
   description = "Azure region for all resources."
@@ -142,6 +146,7 @@ variable "nsg_name" {
   type        = string
   default     = "fullenv-nsg"
 }
+
 variable "nsg_rules" {
   description = "Ingress rules for NSG."
   type = list(object({
@@ -242,7 +247,7 @@ variable "schedule_time_zone" {
   default     = "UTC"
 }
 terraform.tfvars (Example)
-text
+
 region                = "East US"
 resource_group_name   = "fullenv-rg"
 tags = {
@@ -295,7 +300,7 @@ schedule_week_days      = ["Wednesday"]
 schedule_name           = "weekly-patch"
 schedule_time_zone      = "UTC"
 cloud-init-nginx.yml Example
-text
+
 #cloud-config
 package_update: true
 package_upgrade: true
@@ -304,8 +309,10 @@ packages:
 runcmd:
   - systemctl enable nginx
   - systemctl start nginx
+
+
 outputs.tf
-text
+
 output "vm_public_ip" {
   description = "Public IP of deployed Linux VM."
   value       = module.vm.public_ip
@@ -318,8 +325,10 @@ output "patch_schedule_id" {
   description = "ID of scheduled patch deployment."
   value       = module.update_management.schedule_id
 }
+
+
 README.md (with Architecture Diagram & Usage)
-text
+
 # Patch-Managed Azure Linux Web Server: Full Environment
 
 ## Architecture Diagram
@@ -340,15 +349,15 @@ text
 3. **Initialize:**
 terraform init
 
-text
+
 4. **Preview:**
 terraform plan
 
-text
+
 5. **Deploy:**
 terraform apply
 
-text
+
 6. **Access your VM:**  
 - SSH: `ssh azureuser@<public_ip>`
 - HTTP: `http://<public_ip>/`
