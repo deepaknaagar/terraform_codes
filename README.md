@@ -2,7 +2,7 @@ Azure & Terraform (Modular Infrastructure)
 
 Welcome to the Azure Terraform Infrastructure Project! This repository demonstrates how to reliably build, operate, and maintain cloud infrastructure in Microsoft Azure using modular, production-ready Terraform code.
 
-It covers:
+It covers: 
 
 Virtual networks & Linux web servers
 Automated patch management
