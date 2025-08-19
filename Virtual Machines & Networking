@@ -1,5 +1,5 @@
-Directory Layout
-.
+Directory Structure
+
 ├── main.tf
 ├── variables.tf
 ├── outputs.tf
